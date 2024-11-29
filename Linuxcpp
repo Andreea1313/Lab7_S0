@@ -1,0 +1,113 @@
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <condition_variable>
+#include <mutex>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sstream>
+
+class FairResource {
+private:
+    int whiteThreads = 0;
+    int blackThreads = 0;
+    std::mutex mtx;
+    std::condition_variable whiteCondition;
+    std::condition_variable blackCondition;
+
+public:
+    void requestAccess(const std::string &type) {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (type == "alb") {
+            while (blackThreads > 0) {
+                whiteCondition.wait(lock);
+            }
+            whiteThreads++;
+        } else if (type == "negru") {
+            while (whiteThreads > 0) {
+                blackCondition.wait(lock);
+            }
+            blackThreads++;
+        }
+    }
+
+    void releaseAccess(const std::string &type) {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (type == "alb") {
+            whiteThreads--;
+            if (whiteThreads == 0) {
+                blackCondition.notify_all();
+            }
+        } else if (type == "negru") {
+            blackThreads--;
+            if (blackThreads == 0) {
+                whiteCondition.notify_all();
+            }
+        }
+    }
+};
+
+class FairWorker {
+private:
+    std::string type;
+    FairResource &resource;
+
+public:
+    FairWorker(const std::string &type, FairResource &resource) : type(type), resource(resource) {}
+
+    void operator()() {
+        std::cout << std::this_thread::get_id() << " " << type << " vrea sa foloseasca resursa\n";
+        resource.requestAccess(type);
+        std::cout << std::this_thread::get_id() << " " << type << " foloseste resursa\n";
+        std::cout << std::this_thread::get_id() << " " << type << " elibereaza resursa\n";
+        resource.releaseAccess(type);
+    }
+};
+
+void runThreads(const std::string &type) {
+    FairResource resource;
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back(FairWorker(type, resource));
+    }
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    std::cout << type << " toate thread-urile au folosit resursa.\n";
+}
+
+void startProcesses() {
+    pid_t whiteProcess = fork();
+    if (whiteProcess == 0) {
+        // Child process for "alb"
+        execlp("./FairThreadResourceSync", "./FairThreadResourceSync", "child", "alb", nullptr);
+        perror("execlp failed");
+        exit(1);
+    }
+
+    pid_t blackProcess = fork();
+    if (blackProcess == 0) {
+        // Child process for "negru"
+        execlp("./FairThreadResourceSync", "./FairThreadResourceSync", "child", "negru", nullptr);
+        perror("execlp failed");
+        exit(1);
+    }
+
+    // Parent process waits for children
+    int status;
+    waitpid(whiteProcess, &status, 0);
+    waitpid(blackProcess, &status, 0);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "child") {
+        std::string type = argv[2];
+        runThreads(type);
+    } else {
+        startProcesses();
+    }
+    return 0;
+}
