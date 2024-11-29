@@ -1,0 +1,189 @@
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <condition_variable>
+#include <mutex>
+#include <windows.h>
+#include <sstream>
+
+std::mutex coutMutex;
+
+class FairResource {
+private:
+    int whiteThreads = 0;
+    int blackThreads = 0;
+    std::mutex mtx;
+    std::condition_variable whiteCondition;
+    std::condition_variable blackCondition;
+
+public:
+    void requestAccess(const std::string& type) {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (type == "alb") {
+            while (blackThreads > 0) {
+                whiteCondition.wait(lock);
+            }
+            whiteThreads++;
+        }
+        else if (type == "negru") {
+            while (whiteThreads > 0) {
+                blackCondition.wait(lock);
+            }
+            blackThreads++;
+        }
+    }
+
+    void releaseAccess(const std::string& type) {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (type == "alb") {
+            whiteThreads--;
+            if (whiteThreads == 0) {
+                blackCondition.notify_all();
+            }
+        }
+        else if (type == "negru") {
+            blackThreads--;
+            if (blackThreads == 0) {
+                whiteCondition.notify_all();
+            }
+        }
+    }
+};
+
+class FairWorker {
+private:
+    std::string type;
+    FairResource& resource;
+
+public:
+    FairWorker(const std::string& type, FairResource& resource) : type(type), resource(resource) {}
+
+    void operator()() {
+        {
+            std::lock_guard<std::mutex> lock(coutMutex);
+            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " vrea sa foloseasca resursa\n";
+        }
+        resource.requestAccess(type);
+        {
+            std::lock_guard<std::mutex> lock(coutMutex);
+            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " foloseste resursa\n";
+        }
+        resource.releaseAccess(type);
+        {
+            std::lock_guard<std::mutex> lock(coutMutex);
+            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " elibereaza resursa\n";
+        }
+    }
+};
+
+void runThreads(const std::string& type) {
+    FairResource resource;
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back(FairWorker(type, resource));
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(coutMutex);
+        std::cout << "Process " << GetCurrentProcessId() << " " << type << " Toate thread-urile au folosit resursa.\n";
+    }
+}
+
+void startProcesses() {
+    STARTUPINFO siAlb = { sizeof(STARTUPINFO) }, siNegru = { sizeof(STARTUPINFO) };
+    PROCESS_INFORMATION piAlb, piNegru;
+
+    HANDLE hReadAlb, hWriteAlb, hReadNegru, hWriteNegru;
+
+    SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+    if (!CreatePipe(&hReadAlb, &hWriteAlb, &sa, 0)) {
+        return;
+    }
+
+    if (!CreatePipe(&hReadNegru, &hWriteNegru, &sa, 0)) {
+        return;
+    }
+
+    siAlb.hStdOutput = hWriteAlb;
+    siAlb.hStdError = hWriteAlb;
+    siAlb.dwFlags |= STARTF_USESTDHANDLES;
+
+    siNegru.hStdOutput = hWriteNegru;
+    siNegru.hStdError = hWriteNegru;
+    siNegru.dwFlags |= STARTF_USESTDHANDLES;
+
+    char executablePath[MAX_PATH];
+    if (GetModuleFileNameA(NULL, executablePath, MAX_PATH) == 0) {
+        std::cerr << "Failed to get executable path: " << GetLastError() << "\n";
+        return;
+    }
+
+    std::string albCmd = std::string(executablePath) + " child alb";
+    std::vector<char> albCmdBuffer(albCmd.begin(), albCmd.end());
+    albCmdBuffer.push_back('\0');
+
+    if (!CreateProcessA(NULL, albCmdBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &siAlb, &piAlb)) {
+        std::cerr << "Failed to create alb process: " << GetLastError() << "\n";
+        return;
+    }
+
+    std::string negruCmd = std::string(executablePath) + " child negru";
+    std::vector<char> negruCmdBuffer(negruCmd.begin(), negruCmd.end());
+    negruCmdBuffer.push_back('\0');
+
+    if (!CreateProcessA(NULL, negruCmdBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &siNegru, &piNegru)) {
+        std::cerr << "Failed to create negru process: " << GetLastError() << "\n";
+        return;
+    }
+
+    std::cout << "Procesul pt fire albe ID: " << piAlb.dwProcessId << "\n";
+    std::cout << "Procesul pt fire negre ID: " << piNegru.dwProcessId << "\n";
+
+    CloseHandle(hWriteAlb);
+    CloseHandle(hWriteNegru);
+
+    char buffer[1024];
+    DWORD bytesRead;
+
+    while (ReadFile(hReadAlb, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        buffer[bytesRead] = '\0';
+        {
+            std::lock_guard<std::mutex> lock(coutMutex);
+            std::cout << buffer;
+        }
+    }
+
+    while (ReadFile(hReadNegru, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        buffer[bytesRead] = '\0';
+        {
+            std::lock_guard<std::mutex> lock(coutMutex);
+            std::cout << buffer;
+        }
+    }
+
+    WaitForSingleObject(piAlb.hProcess, INFINITE);
+    WaitForSingleObject(piNegru.hProcess, INFINITE);
+
+    CloseHandle(hReadAlb);
+    CloseHandle(hReadNegru);
+    CloseHandle(piAlb.hProcess);
+    CloseHandle(piAlb.hThread);
+    CloseHandle(piNegru.hProcess);
+    CloseHandle(piNegru.hThread);
+}
+
+int main(int argc, char* argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "child") {
+        std::string type = argv[2];
+        runThreads(type);
+    }
+    else {
+        startProcesses();
+    }
+    return 0;
+}
