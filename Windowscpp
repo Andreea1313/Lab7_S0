@@ -5,20 +5,21 @@
 #include <mutex>
 #include <windows.h>
 #include <sstream>
+using namespace std;
 
-std::mutex coutMutex;
+mutex coutMutex;
 
 class FairResource {
 private:
     int whiteThreads = 0;
     int blackThreads = 0;
-    std::mutex mtx;
-    std::condition_variable whiteCondition;
-    std::condition_variable blackCondition;
+    mutex mtx;
+    condition_variable whiteCondition;
+    condition_variable blackCondition;
 
 public:
-    void requestAccess(const std::string& type) {
-        std::unique_lock<std::mutex> lock(mtx);
+    void requestAccess(const   string& type) {
+        unique_lock<  mutex> lock(mtx);
         if (type == "alb") {
             while (blackThreads > 0) {
                 whiteCondition.wait(lock);
@@ -33,8 +34,8 @@ public:
         }
     }
 
-    void releaseAccess(const std::string& type) {
-        std::unique_lock<std::mutex> lock(mtx);
+    void releaseAccess(const   string& type) {
+        unique_lock<  mutex> lock(mtx);
         if (type == "alb") {
             whiteThreads--;
             if (whiteThreads == 0) {
@@ -52,34 +53,34 @@ public:
 
 class FairWorker {
 private:
-    std::string type;
+    string type;
     FairResource& resource;
 
 public:
-    FairWorker(const std::string& type, FairResource& resource) : type(type), resource(resource) {}
+    FairWorker(const   string& type, FairResource& resource) : type(type), resource(resource) {}
 
     void operator()() {
         {
-            std::lock_guard<std::mutex> lock(coutMutex);
-            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " vrea sa foloseasca resursa\n";
+            lock_guard<  mutex> lock(coutMutex);
+            cout << "Proces " << GetCurrentProcessId() << " Thread " << this_thread::get_id() << " " << type << " vrea sa foloseasca resursa\n";
         }
         resource.requestAccess(type);
         {
-            std::lock_guard<std::mutex> lock(coutMutex);
-            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " foloseste resursa\n";
+            lock_guard<  mutex> lock(coutMutex);
+            cout << "Proces " << GetCurrentProcessId() << " Thread " << this_thread::get_id() << " " << type << " foloseste resursa\n";
         }
         resource.releaseAccess(type);
         {
-            std::lock_guard<std::mutex> lock(coutMutex);
-            std::cout << "Proces " << GetCurrentProcessId() << " Thread " << std::this_thread::get_id() << " " << type << " elibereaza resursa\n";
+            lock_guard<  mutex> lock(coutMutex);
+            cout << "Proces " << GetCurrentProcessId() << " Thread " << this_thread::get_id() << " " << type << " elibereaza resursa\n";
         }
     }
 };
 
-void runThreads(const std::string& type) {
+void runThreads(const   string& type) {
     FairResource resource;
 
-    std::vector<std::thread> threads;
+    vector<  thread> threads;
     for (int i = 0; i < 4; ++i) {
         threads.emplace_back(FairWorker(type, resource));
     }
@@ -89,8 +90,8 @@ void runThreads(const std::string& type) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(coutMutex);
-        std::cout << "Process " << GetCurrentProcessId() << " " << type << " Toate thread-urile au folosit resursa.\n";
+        lock_guard<  mutex> lock(coutMutex);
+        cout << "Proces " << GetCurrentProcessId() << " " << type << " Toate thread-urile au folosit resursa.\n";
     }
 }
 
@@ -119,30 +120,27 @@ void startProcesses() {
 
     char executablePath[MAX_PATH];
     if (GetModuleFileNameA(NULL, executablePath, MAX_PATH) == 0) {
-        std::cerr << "Failed to get executable path: " << GetLastError() << "\n";
         return;
     }
 
-    std::string albCmd = std::string(executablePath) + " child alb";
-    std::vector<char> albCmdBuffer(albCmd.begin(), albCmd.end());
+    string albCmd = string(executablePath) + " child alb";
+    vector<char> albCmdBuffer(albCmd.begin(), albCmd.end());
     albCmdBuffer.push_back('\0');
 
     if (!CreateProcessA(NULL, albCmdBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &siAlb, &piAlb)) {
-        std::cerr << "Failed to create alb process: " << GetLastError() << "\n";
         return;
     }
 
-    std::string negruCmd = std::string(executablePath) + " child negru";
-    std::vector<char> negruCmdBuffer(negruCmd.begin(), negruCmd.end());
+    string negruCmd = string(executablePath) + " child negru";
+    vector<char> negruCmdBuffer(negruCmd.begin(), negruCmd.end());
     negruCmdBuffer.push_back('\0');
 
     if (!CreateProcessA(NULL, negruCmdBuffer.data(), NULL, NULL, TRUE, 0, NULL, NULL, &siNegru, &piNegru)) {
-        std::cerr << "Failed to create negru process: " << GetLastError() << "\n";
         return;
     }
 
-    std::cout << "Procesul pt fire albe ID: " << piAlb.dwProcessId << "\n";
-    std::cout << "Procesul pt fire negre ID: " << piNegru.dwProcessId << "\n";
+    cout << "Procesul pt fire albe ID: " << piAlb.dwProcessId << "\n";
+    cout << "Procesul pt fire negre ID: " << piNegru.dwProcessId << "\n";
 
     CloseHandle(hWriteAlb);
     CloseHandle(hWriteNegru);
@@ -153,16 +151,16 @@ void startProcesses() {
     while (ReadFile(hReadAlb, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
         buffer[bytesRead] = '\0';
         {
-            std::lock_guard<std::mutex> lock(coutMutex);
-            std::cout << buffer;
+            lock_guard<  mutex> lock(coutMutex);
+            cout << buffer;
         }
     }
 
     while (ReadFile(hReadNegru, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
         buffer[bytesRead] = '\0';
         {
-            std::lock_guard<std::mutex> lock(coutMutex);
-            std::cout << buffer;
+            lock_guard<  mutex> lock(coutMutex);
+            cout << buffer;
         }
     }
 
@@ -178,8 +176,8 @@ void startProcesses() {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && std::string(argv[1]) == "child") {
-        std::string type = argv[2];
+    if (argc > 1 && string(argv[1]) == "child") {
+        string type = argv[2];
         runThreads(type);
     }
     else {
