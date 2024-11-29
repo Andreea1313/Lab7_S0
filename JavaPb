@@ -1,0 +1,151 @@
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
+class FairResource {
+    private int whiteThreads = 0;
+    private int blackThreads = 0;
+    private final Lock lock = new ReentrantLock();
+    private final Condition whiteCondition = lock.newCondition();
+    private final Condition blackCondition = lock.newCondition();
+
+    public void requestAccess(String type) throws InterruptedException {
+        lock.lock();
+        try {
+            if (type.equals("alb")) {
+                while (blackThreads > 0) {
+                    whiteCondition.await();
+                }
+                whiteThreads++;
+            } else if (type.equals("negru")) {
+                while (whiteThreads > 0) {
+                    blackCondition.await();
+                }
+                blackThreads++;
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void releaseAccess(String type) {
+        lock.lock();
+        try {
+            if (type.equals("alb")) {
+                whiteThreads--;
+                if (whiteThreads == 0) {
+                    blackCondition.signalAll();
+                }
+            } else if (type.equals("negru")) {
+                blackThreads--;
+                if (blackThreads == 0) {
+                    whiteCondition.signalAll();
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+
+class FairWorker implements Runnable {
+    private final String type;
+    private final FairResource resource;
+
+    public FairWorker(String type, FairResource resource) {
+        this.type = type;
+        this.resource = resource;
+    }
+
+    @Override
+    public void run() {
+        try {
+            System.out.println(Thread.currentThread().getName() +" "+ type + " vrea sa foloseasca resursa");
+            resource.requestAccess(type);
+            System.out.println(Thread.currentThread().getName()+ " "+ type + " foloseste resursa");
+            System.out.println(Thread.currentThread().getName()+" "+ type + " elibereaza resursa");
+            resource.releaseAccess(type);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+
+ class FairThreadResourceSync {
+    public static void main(String[] args) {
+        if (args.length > 0 && args[0].equals("child")) {
+            String type = args[1];
+            runThreads(type);
+        } else {
+            startProcesses();
+        }
+    }
+
+    private static void startProcesses() {
+
+        try {
+            ProcessBuilder whiteProcessBuilder = new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"), "FairThreadResourceSync", "child", "alb"
+            );
+            Process whiteProcess = whiteProcessBuilder.start();
+
+            ProcessBuilder blackProcessBuilder = new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"), "FairThreadResourceSync", "child", "negru"
+            );
+            Process blackProcess = blackProcessBuilder.start();
+
+            // Capturăm ieșirea proceselor
+            Thread whiteOutput = new Thread(() -> printProcessOutput(whiteProcess, "ProcesAlbe"));
+            Thread blackOutput = new Thread(() -> printProcessOutput(blackProcess, "ProcesNegre"));
+
+            whiteOutput.start();
+            blackOutput.start();
+
+            whiteProcess.waitFor();
+            blackProcess.waitFor();
+
+            whiteOutput.join();
+            blackOutput.join();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    private static void printProcessOutput(Process process, String processName) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                System.out.println(processName + ": " + line);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void runThreads(String type) {
+        FairResource resource = new FairResource();
+
+        Thread[] threads = new Thread[4];
+        for (int i = 0; i < threads.length; i++) {
+            threads[i] = new Thread(new FairWorker(type, resource));
+        }
+
+        for (Thread thread : threads) {
+            thread.start();
+        }
+
+        for (Thread thread : threads) {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        System.out.println(type + " toate thread-urile au folosit resursa.");
+    }
+}
